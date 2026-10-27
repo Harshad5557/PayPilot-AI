@@ -1,0 +1,30 @@
+{
+  "name": "paypilot-ai",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -n api,web \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "npm run dev --workspace @paypilot/api",
+    "dev:web": "npm run dev --workspace @paypilot/web",
+    "build": "npm run build --workspaces",
+    "test": "npm run test:unit && npm run test:api && npm run test:legacy",
+    "test:unit": "vitest run --config vitest.config.mts tests/unit",
+    "test:api": "vitest run --config vitest.config.mts tests/api",
+    "test:legacy": "npm run test:legacy --workspace @paypilot/api",
+    "test:e2e": "playwright test --config playwright.config.ts",
+    "lint": "npm run lint --workspaces"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.1",
+    "@types/supertest": "^7.2.1",
+    "concurrently": "^9.2.1",
+    "supertest": "^7.3.1",
+    "vitest": "^5.0.5"
+  },
+  "engines": {
+    "node": ">=20.19.0"
+  }
+}

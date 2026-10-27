@@ -1,0 +1,158 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+enum InvoiceStatus {
+  PENDING
+  OVERDUE
+  PAID
+  CANCELLED
+}
+
+enum PaymentPlanStatus {
+  PROPOSED
+  APPROVED
+  REJECTED
+  EXPIRED
+  STALE
+  CANCELLED
+}
+
+enum PaymentAttemptStatus {
+  PENDING
+  CAPTURING
+  AMBIGUOUS
+  DECLINED
+  FAILED
+  SUCCEEDED
+  CANCELLED
+}
+
+model User {
+  id              String           @id @default(cuid())
+  email           String           @unique
+  name            String
+  passwordHash    String?
+  createdAt       DateTime         @default(now())
+  sessions        AuthSession[]
+  invoices        Invoice[]
+  paymentPlans    PaymentPlan[]
+  paymentAttempts PaymentAttempt[]
+  auditEvents     AuditEvent[]
+}
+
+model AuthSession {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Invoice {
+  id           String        @id @default(cuid())
+  ownerId      String
+  title        String
+  counterparty String
+  amount       Int
+  currency     String
+  dueDate      DateTime
+  status       InvoiceStatus
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  owner        User          @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  attempts     PaymentAttempt[]
+  paymentAttemptInvoices PaymentAttemptInvoice[]
+
+  @@index([ownerId])
+  @@index([status])
+  @@index([dueDate])
+  @@index([ownerId, status, dueDate])
+}
+
+model PaymentPlan {
+  id           String            @id @default(cuid())
+  ownerId      String
+  status       PaymentPlanStatus
+  proposalJson String
+  totalAmount  Int
+  currency     String
+  expiresAt    DateTime
+  approvedAt   DateTime?
+  proposalVersion         String  @unique
+  approvedProposalVersion String?
+  approvedAmount          Int?
+  approvedCurrency        String?
+  createdAt    DateTime          @default(now())
+  owner        User              @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  attempts     PaymentAttempt[]
+
+  @@index([ownerId])
+  @@index([status])
+  @@index([expiresAt])
+  @@index([ownerId, status])
+}
+
+model PaymentAttempt {
+  id                String               @id @default(cuid())
+  ownerId           String
+  invoiceId         String
+  paymentPlanId     String?
+  providerOrderId   String?              @unique
+  providerCaptureId String?              @unique
+  amount            Int
+  currency          String
+  status            PaymentAttemptStatus
+  idempotencyKey    String               @unique
+  providerStatus    String?
+  providerErrorCode String?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  owner             User                 @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  invoice           Invoice              @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  paymentPlan       PaymentPlan?         @relation(fields: [paymentPlanId], references: [id], onDelete: SetNull)
+  invoiceAllocations PaymentAttemptInvoice[]
+
+  @@index([ownerId])
+  @@index([invoiceId])
+  @@index([paymentPlanId])
+  @@index([status])
+}
+
+model PaymentAttemptInvoice {
+  id               String         @id @default(cuid())
+  paymentAttemptId String
+  invoiceId        String
+  amount           Int
+  currency         String
+  paymentAttempt   PaymentAttempt @relation(fields: [paymentAttemptId], references: [id], onDelete: Cascade)
+  invoice          Invoice        @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+
+  @@unique([paymentAttemptId, invoiceId])
+  @@index([invoiceId])
+}
+
+model AuditEvent {
+  id           String   @id @default(cuid())
+  ownerId      String
+  eventType    String
+  entityType   String
+  entityId     String
+  metadataJson String
+  createdAt    DateTime @default(now())
+  owner        User     @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+
+  @@index([ownerId])
+  @@index([eventType])
+  @@index([entityType, entityId])
+  @@index([ownerId, createdAt])
+}

@@ -1,0 +1,32 @@
+@import "tailwindcss";
+
+@layer components {
+  .button-primary {
+    @apply inline-flex min-h-10 items-center justify-center rounded-xl bg-[#17233e] px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#243654] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-600 disabled:cursor-not-allowed disabled:opacity-55;
+  }
+
+  .button-secondary {
+    @apply inline-flex min-h-10 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:border-teal-300 hover:bg-teal-50 hover:text-teal-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-600 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400;
+  }
+
+  .button-quiet {
+    @apply inline-flex min-h-10 items-center justify-center rounded-xl px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-600;
+  }
+
+  .button-icon {
+    @apply inline-flex size-10 items-center justify-center rounded-xl text-slate-600 transition hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-600;
+  }
+
+  .button-sidebar {
+    @apply inline-flex min-h-10 items-center rounded-xl px-3 text-left text-sm font-medium text-slate-300 transition hover:bg-white/[0.08] hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-300;
+  }
+}
+
+#root {
+  min-height: 100svh;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+}

@@ -1,0 +1,36 @@
+{
+  "name": "@paypilot/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "npm run db:generate && tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "test:legacy": "tsx --import ./src/test-bootstrap.ts --test --test-concurrency=1 src/app.test.ts src/auth.test.ts src/invoices.test.ts src/assistant.test.ts src/payment-plans.test.ts src/paypal-payments.test.ts src/middleware/assistant-rate-limit.test.ts src/middleware/development-demo-identity.test.ts src/repositories/database.integration.test.ts src/validation/invoice.validation.test.ts",
+    "lint": "oxlint src prisma/seed.ts",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:seed": "prisma db seed",
+    "db:push": "prisma db push"
+  },
+  "dependencies": {
+    "@google/genai": "^2.31.0",
+    "@prisma/adapter-better-sqlite3": "^7.10.1",
+    "@prisma/client": "^7.10.1",
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.9",
+    "express": "^5.3.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.3",
+    "@types/node": "^24.19.2",
+    "oxlint": "^1.88.0",
+    "prisma": "^7.10.1",
+    "tsx": "^4.20.6",
+    "typescript": "~6.0.3"
+  }
+}
