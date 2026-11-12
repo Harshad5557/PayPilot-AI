@@ -28,6 +28,15 @@ function formatCurrency(amountMinor: number, currency: string) {
 
 function messageFor(error: unknown) {
   if (error instanceof ApiRequestError) return error.message
+  const message =
+    error instanceof Error
+      ? error.message
+      : error && typeof error === 'object' && 'message' in error
+        ? error.message
+        : undefined
+  if (typeof message === 'string' && message.trim()) {
+    return `PayPal checkout failed: ${message.trim().slice(0, 240)}`
+  }
   return 'The payment service could not complete the request. Check the attempt status before retrying.'
 }
 
@@ -339,7 +348,7 @@ export function PaymentPlanDialog({
                   createOrder={createOrder}
                   onApprove={async (data) => capture(data.orderID)}
                   onCancel={cancel}
-                  onError={async () => {
+                  onError={async (reason) => {
                     if (attempt) {
                       try {
                         setAttempt(await getPaymentAttempt(attempt.id))
@@ -347,7 +356,10 @@ export function PaymentPlanDialog({
                         setNotice('Checkout result is uncertain. Refresh the backend payment attempt before retrying.')
                       }
                     }
-                    setError('PayPal checkout reported an error. No success is assumed; check the backend attempt status.')
+                    setError((currentError) =>
+                      currentError ??
+                      `${messageFor(reason)} No success is assumed; check the backend attempt status.`,
+                    )
                   }}
                 />
               </PayPalScriptProvider>

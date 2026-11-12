@@ -772,7 +772,7 @@ function InvoiceTable({
         <EmptyState query={query} />
       ) : (
         <>
-          <div className="min-w-0 flex-1 overflow-x-auto">
+          <div className="min-w-0 flex-1 overflow-x-auto px-6">
             <table className="w-full min-w-[720px] table-fixed text-left">
               <thead>
                 <tr className="bg-slate-50/80 text-xs font-semibold uppercase tracking-[0.11em] text-slate-500">

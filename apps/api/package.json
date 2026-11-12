@@ -7,7 +7,7 @@
     "dev": "tsx watch src/server.ts",
     "build": "npm run db:generate && tsc -p tsconfig.json",
     "start": "node dist/server.js",
-    "test:legacy": "tsx --import ./src/test-bootstrap.ts --test --test-concurrency=1 src/app.test.ts src/auth.test.ts src/invoices.test.ts src/assistant.test.ts src/payment-plans.test.ts src/paypal-payments.test.ts src/middleware/assistant-rate-limit.test.ts src/middleware/development-demo-identity.test.ts src/repositories/database.integration.test.ts src/validation/invoice.validation.test.ts",
+    "test:legacy": "tsx --import ./src/test-bootstrap.ts --test --test-concurrency=1 src/app.test.ts src/auth.test.ts src/invoices.test.ts src/assistant.test.ts src/payment-plans.test.ts src/paypal-payments.test.ts src/services/paypal.provider.test.ts src/middleware/assistant-rate-limit.test.ts src/middleware/development-demo-identity.test.ts src/repositories/database.integration.test.ts src/validation/invoice.validation.test.ts",
     "lint": "oxlint src prisma/seed.ts",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",

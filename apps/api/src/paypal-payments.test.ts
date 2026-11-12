@@ -19,10 +19,15 @@ import {
   capturePayPalAttempt,
   createApprovedPayPalOrder,
   getPaymentAttempt,
+  recoverAmbiguousPayPalOrder,
   reconcilePayPalAttempt,
   type PayPalPaymentProvider,
 } from './services/paypal-payments.service.js'
 import { createInvoice } from './repositories/invoices.repository.js'
+import {
+  paypalOrderResponseSchema,
+  paypalRetrievedOrderSchema,
+} from './validation/paypal.validation.js'
 
 const ownerEmail = 'owner@northstar-studio.example.test'
 const server = app.listen(0)
@@ -112,6 +117,12 @@ function orderResponse(input: { attemptId: string; currency: string; totalAmount
       amount: {
         currency_code: input.currency,
         value: (input.totalAmount / 100).toFixed(2),
+        breakdown: {
+          item_total: {
+            currency_code: input.currency,
+            value: (input.totalAmount / 100).toFixed(2),
+          },
+        },
       },
     }],
   }
@@ -163,6 +174,51 @@ function pendingCapture(orderId: string, attemptId: string) {
   }
 }
 
+function retrievedOrder(
+  input: { orderId: string; attemptId: string; currency: string; totalAmount: number },
+  status: string = 'CREATED',
+) {
+  return {
+    ...orderResponse(input),
+    id: input.orderId,
+    status,
+  }
+}
+
+async function createAmbiguousAttempt() {
+  const { plan } = await createApprovedPlan()
+  const orderId = `ORDER-CANDIDATE-${randomUUID()}`
+  let createCalls = 0
+  const provider: PayPalPaymentProvider = {
+    createOrder: async () => {
+      createCalls += 1
+      return { id: orderId, status: 'CREATED', links: [] }
+    },
+    captureOrder: async () => ({}),
+  }
+  let attemptId: string | undefined
+  await assert.rejects(
+    () =>
+      createApprovedPayPalOrder(
+        ownerId,
+        plan.id,
+        plan.proposalVersion,
+        provider,
+        true,
+      ),
+    (error: unknown) => {
+      if (!(error instanceof HttpError) || error.code !== 'PAYPAL_UNEXPECTED_RESPONSE') {
+        return false
+      }
+      attemptId = error.meta?.paymentAttemptId
+      return Boolean(attemptId)
+    },
+  )
+  assert.ok(attemptId)
+  attemptIds.push(attemptId)
+  return { attemptId, orderId, plan, provider, getCreateCalls: () => createCalls }
+}
+
 test('PayPal Sandbox configuration endpoint exposes only the public client ID', async () => {
   const response = await request('/api/payments/config')
   assert.equal(response.status, 200)
@@ -170,6 +226,37 @@ test('PayPal Sandbox configuration endpoint exposes only the public client ID', 
   assert.equal(payload.data.environment, 'sandbox')
   assert.equal(typeof payload.data.configured, 'boolean')
   assert.equal('clientSecret' in payload.data, false)
+})
+
+test('PayPal order schemas distinguish create responses from retrieved orders', () => {
+  const response = orderResponse({
+    attemptId: 'attempt-test',
+    currency: 'USD',
+    totalAmount: 12345,
+  })
+  assert.equal(paypalOrderResponseSchema.safeParse(response).success, true)
+  assert.equal(
+    paypalOrderResponseSchema.safeParse({
+      id: response.id,
+      intent: 'CAPTURE',
+      status: 'CREATED',
+    }).success,
+    false,
+  )
+  assert.equal(
+    paypalRetrievedOrderSchema.safeParse(
+      retrievedOrder(
+        {
+          orderId: response.id,
+          attemptId: 'attempt-test',
+          currency: 'USD',
+          totalAmount: 12345,
+        },
+        'APPROVED',
+      ),
+    ).success,
+    true,
+  )
 })
 
 test('order creation requires approval and ignores browser-supplied amounts', async () => {
@@ -239,6 +326,53 @@ test('order creation is idempotent and stores provider order plus invoice alloca
   assert.equal(first.amountMinor, invoice.amount)
   assert.deepEqual(first.invoiceIds, [invoice.id])
   assert.equal(first.status, PaymentAttemptStatus.PENDING)
+})
+
+test('order creation accepts PayPal responses that omit optional purchase-unit references', async () => {
+  const { plan } = await createApprovedPlan()
+  const provider: PayPalPaymentProvider = {
+    createOrder: async (input) => {
+      const response = orderResponse(input)
+      const purchaseUnit = response.purchase_units[0]!
+      return {
+        ...response,
+        purchase_units: [{ amount: purchaseUnit.amount }],
+      }
+    },
+    captureOrder: async () => ({}),
+  }
+  const attempt = await createApprovedPayPalOrder(
+    ownerId,
+    plan.id,
+    plan.proposalVersion,
+    provider,
+    true,
+  )
+  attemptIds.push(attempt.id)
+  assert.ok(attempt.paypalOrderId)
+  assert.equal(attempt.status, PaymentAttemptStatus.PENDING)
+})
+
+test('unexpected order response leaves the attempt ambiguous and blocks another create', async () => {
+  const ambiguous = await createAmbiguousAttempt()
+  assert.equal(ambiguous.getCreateCalls(), 1)
+  assert.equal(
+    (await getPaymentAttempt(ownerId, ambiguous.attemptId)).status,
+    PaymentAttemptStatus.AMBIGUOUS,
+  )
+  await assert.rejects(
+    () =>
+      createApprovedPayPalOrder(
+        ownerId,
+        ambiguous.plan.id,
+        ambiguous.plan.proposalVersion,
+        ambiguous.provider,
+        true,
+      ),
+    (error: unknown) =>
+      error instanceof HttpError && error.code === 'PAYPAL_ORDER_RECOVERY_REQUIRED',
+  )
+  assert.equal(ambiguous.getCreateCalls(), 1)
 })
 
 test('capture rejects an invalid order ID and does not contact PayPal', async () => {
@@ -478,6 +612,143 @@ test('ambiguous capture reconciles after payment-plan expiry', async () => {
   assert.ok(audit)
 })
 
+test('reconciliation validates a retrieved order response without capture fields', async () => {
+  const { plan, invoice } = await createApprovedPlan()
+  let captureCalls = 0
+  const provider: PayPalPaymentProvider = {
+    createOrder: async (input) => orderResponse(input),
+    captureOrder: async () => {
+      captureCalls += 1
+      return {}
+    },
+    getOrder: async (orderId) => {
+      const attempt = await prisma.paymentAttempt.findFirst({
+        where: { providerOrderId: orderId },
+      })
+      assert.ok(attempt)
+      return retrievedOrder(
+        {
+          orderId,
+          attemptId: attempt.id,
+          currency: attempt.currency,
+          totalAmount: attempt.amount,
+        },
+        'CREATED',
+      )
+    },
+  }
+  const attempt = await createApprovedPayPalOrder(
+    ownerId,
+    plan.id,
+    plan.proposalVersion,
+    provider,
+    true,
+  )
+  attemptIds.push(attempt.id)
+
+  const reconciled = await reconcilePayPalAttempt(ownerId, attempt.id, provider)
+
+  assert.equal(reconciled.status, PaymentAttemptStatus.PENDING)
+  assert.equal(reconciled.providerStatus, 'CREATED')
+  assert.equal(reconciled.processing, true)
+  assert.equal(captureCalls, 0)
+  assert.equal(
+    (await prisma.invoice.findUnique({ where: { id: invoice.id } }))?.status,
+    InvoiceStatus.PENDING,
+  )
+})
+
+test('approved retrieved order continues through verified capture', async () => {
+  const { plan, invoice } = await createApprovedPlan()
+  let captureCalls = 0
+  const provider: PayPalPaymentProvider = {
+    createOrder: async (input) => orderResponse(input),
+    captureOrder: async (input) => {
+      captureCalls += 1
+      const attempt = await prisma.paymentAttempt.findFirst({
+        where: { providerOrderId: input.orderId },
+      })
+      assert.ok(attempt)
+      return completedCapture(input.orderId, attempt.id)
+    },
+    getOrder: async (orderId) => {
+      const attempt = await prisma.paymentAttempt.findFirst({
+        where: { providerOrderId: orderId },
+      })
+      assert.ok(attempt)
+      return retrievedOrder(
+        {
+          orderId,
+          attemptId: attempt.id,
+          currency: attempt.currency,
+          totalAmount: attempt.amount,
+        },
+        'APPROVED',
+      )
+    },
+  }
+  const attempt = await createApprovedPayPalOrder(
+    ownerId,
+    plan.id,
+    plan.proposalVersion,
+    provider,
+    true,
+  )
+  attemptIds.push(attempt.id)
+
+  const reconciled = await reconcilePayPalAttempt(ownerId, attempt.id, provider)
+
+  assert.equal(captureCalls, 1)
+  assert.equal(reconciled.status, PaymentAttemptStatus.SUCCEEDED)
+  assert.equal(
+    (await prisma.invoice.findUnique({ where: { id: invoice.id } }))?.status,
+    InvoiceStatus.PAID,
+  )
+})
+
+test('voided retrieved order is recorded as terminal without paying invoices', async () => {
+  const { plan, invoice } = await createApprovedPlan()
+  const provider: PayPalPaymentProvider = {
+    createOrder: async (input) => orderResponse(input),
+    captureOrder: async () => {
+      throw new Error('A voided PayPal order must not be captured.')
+    },
+    getOrder: async (orderId) => {
+      const attempt = await prisma.paymentAttempt.findFirst({
+        where: { providerOrderId: orderId },
+      })
+      assert.ok(attempt)
+      return retrievedOrder(
+        {
+          orderId,
+          attemptId: attempt.id,
+          currency: attempt.currency,
+          totalAmount: attempt.amount,
+        },
+        'VOIDED',
+      )
+    },
+  }
+  const attempt = await createApprovedPayPalOrder(
+    ownerId,
+    plan.id,
+    plan.proposalVersion,
+    provider,
+    true,
+  )
+  attemptIds.push(attempt.id)
+
+  const reconciled = await reconcilePayPalAttempt(ownerId, attempt.id, provider)
+
+  assert.equal(reconciled.status, PaymentAttemptStatus.FAILED)
+  assert.equal(reconciled.providerStatus, 'VOIDED')
+  assert.equal(reconciled.processing, false)
+  assert.equal(
+    (await prisma.invoice.findUnique({ where: { id: invoice.id } }))?.status,
+    InvoiceStatus.PENDING,
+  )
+})
+
 test('pending provider capture can be reconciled after plan expiry', async () => {
   const { plan, invoice } = await createApprovedPlan()
   const provider: PayPalPaymentProvider = {
@@ -622,6 +893,201 @@ test('unexpected PayPal capture payload is ambiguous and never reported as succe
     (await getPaymentAttempt(ownerId, attempt.id)).status,
     PaymentAttemptStatus.AMBIGUOUS,
   )
+  assert.equal(
+    (await prisma.invoice.findUnique({ where: { id: invoice.id } }))?.status,
+    InvoiceStatus.PENDING,
+  )
+})
+
+test('recovery rejects mismatched attempt identifiers, amount, and currency', async () => {
+  const invalidOrder = async (
+    mutation: (order: ReturnType<typeof retrievedOrder>) => unknown,
+  ) => {
+    const ambiguous = await createAmbiguousAttempt()
+    const provider: PayPalPaymentProvider = {
+      createOrder: async () => ({}),
+      captureOrder: async () => ({}),
+      getOrder: async (orderId) => {
+        const order = retrievedOrder(
+          {
+            orderId,
+            attemptId: ambiguous.attemptId,
+            currency: 'USD',
+            totalAmount: 12345,
+          },
+        )
+        return mutation(order)
+      },
+    }
+    return assert.rejects(
+      () =>
+        recoverAmbiguousPayPalOrder(
+          { attemptId: ambiguous.attemptId, orderId: ambiguous.orderId, userId: ownerId },
+          provider,
+        ),
+      (error: unknown) => error instanceof HttpError,
+    )
+  }
+
+  await invalidOrder((order) => ({
+    ...order,
+    purchase_units: [
+      { ...order.purchase_units[0]!, custom_id: 'another-attempt' },
+    ],
+  }))
+  await invalidOrder((order) => ({
+    ...order,
+    purchase_units: [
+      {
+        ...order.purchase_units[0]!,
+        amount: { currency_code: 'USD', value: '999.99' },
+      },
+    ],
+  }))
+  await invalidOrder((order) => ({
+    ...order,
+    purchase_units: [
+      {
+        ...order.purchase_units[0]!,
+        amount: { currency_code: 'EUR', value: '123.45' },
+      },
+    ],
+  }))
+})
+
+test('recovery verifies ownership and only attaches a provider-verified order', async () => {
+  const ambiguous = await createAmbiguousAttempt()
+  let providerCalls = 0
+  const provider: PayPalPaymentProvider = {
+    createOrder: async () => ({}),
+    captureOrder: async () => ({}),
+    getOrder: async (orderId) => {
+      providerCalls += 1
+      return retrievedOrder(
+        {
+          orderId,
+          attemptId: ambiguous.attemptId,
+          currency: 'USD',
+          totalAmount: 12345,
+        },
+      )
+    },
+  }
+
+  await assert.rejects(
+    () =>
+      recoverAmbiguousPayPalOrder(
+        {
+          attemptId: ambiguous.attemptId,
+          orderId: ambiguous.orderId,
+          userId: `not-${ownerId}`,
+        },
+        provider,
+      ),
+    (error: unknown) => error instanceof HttpError && error.statusCode === 404,
+  )
+  assert.equal(providerCalls, 0)
+
+  const recovered = await recoverAmbiguousPayPalOrder(
+    { attemptId: ambiguous.attemptId, orderId: ambiguous.orderId, userId: ownerId },
+    provider,
+  )
+  assert.equal(recovered.paypalOrderId, ambiguous.orderId)
+  assert.equal(recovered.providerStatus, 'CREATED')
+  assert.equal(recovered.status, PaymentAttemptStatus.AMBIGUOUS)
+  await assert.rejects(
+    () =>
+      createApprovedPayPalOrder(
+        ownerId,
+        ambiguous.plan.id,
+        ambiguous.plan.proposalVersion,
+        provider,
+        true,
+      ),
+    (error: unknown) =>
+      error instanceof HttpError && error.code === 'PAYPAL_ORDER_RECONCILIATION_REQUIRED',
+  )
+  const audit = await prisma.auditEvent.findFirst({
+    where: {
+      entityType: 'PaymentAttempt',
+      entityId: ambiguous.attemptId,
+      eventType: 'PAYPAL_ORDER_RECOVERED',
+    },
+  })
+  assert.ok(audit)
+})
+
+test('concurrent recovery cannot attach two different orders', async () => {
+  const ambiguous = await createAmbiguousAttempt()
+  const orderIds = [`ORDER-A-${randomUUID()}`, `ORDER-B-${randomUUID()}`]
+  const provider: PayPalPaymentProvider = {
+    createOrder: async () => ({}),
+    captureOrder: async () => ({}),
+    getOrder: async (orderId) =>
+      retrievedOrder(
+        {
+          orderId,
+          attemptId: ambiguous.attemptId,
+          currency: 'USD',
+          totalAmount: 12345,
+        },
+      ),
+  }
+
+  const results = await Promise.allSettled(
+    orderIds.map((orderId) =>
+      recoverAmbiguousPayPalOrder(
+        { attemptId: ambiguous.attemptId, orderId, userId: ownerId },
+        provider,
+      ),
+    ),
+  )
+  const attached = await getPaymentAttempt(ownerId, ambiguous.attemptId)
+
+  assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1)
+  assert.ok(orderIds.includes(attached.paypalOrderId!))
+  assert.equal(
+    await prisma.paymentAttempt.count({
+      where: { id: ambiguous.attemptId, providerOrderId: { in: orderIds } },
+    }),
+    1,
+  )
+})
+
+test('completed order without a verified capture does not mark its invoice paid', async () => {
+  const { plan, invoice } = await createApprovedPlan()
+  const provider: PayPalPaymentProvider = {
+    createOrder: async (input) => orderResponse(input),
+    captureOrder: async () => ({}),
+    getOrder: async (orderId) => {
+      const attempt = await prisma.paymentAttempt.findFirst({
+        where: { providerOrderId: orderId },
+      })
+      assert.ok(attempt)
+      return retrievedOrder(
+        {
+          orderId,
+          attemptId: attempt.id,
+          currency: attempt.currency,
+          totalAmount: attempt.amount,
+        },
+        'COMPLETED',
+      )
+    },
+  }
+  const attempt = await createApprovedPayPalOrder(
+    ownerId,
+    plan.id,
+    plan.proposalVersion,
+    provider,
+    true,
+  )
+  attemptIds.push(attempt.id)
+
+  const reconciled = await reconcilePayPalAttempt(ownerId, attempt.id, provider)
+
+  assert.equal(reconciled.status, PaymentAttemptStatus.AMBIGUOUS)
+  assert.equal(reconciled.processing, true)
   assert.equal(
     (await prisma.invoice.findUnique({ where: { id: invoice.id } }))?.status,
     InvoiceStatus.PENDING,

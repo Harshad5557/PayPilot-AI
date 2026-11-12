@@ -32,7 +32,8 @@ unless the API verifies a final provider capture.
   expiry and stale-data validation, and audit events.
 - PayPal Orders v2 Sandbox order creation, server-side capture, idempotent
   requests, ownership checks, verified provider responses, and reconciliation
-  for pending or ambiguous outcomes.
+  for pending or ambiguous outcomes. The service also supports verified
+  recovery of an ambiguous order when its provider order ID is known.
 - Vitest unit tests, Supertest API tests, serial database-backed regression
   tests, and a Playwright invoice-to-mocked-checkout browser journey.
 
@@ -47,7 +48,10 @@ unless the API verifies a final provider capture.
   incorrect; validate obligations independently.
 - PayPal Sandbox is the only supported provider environment. There is no live
   payment mode, webhook processing, or automatic background reconciliation.
-  Operators must check unresolved attempts using the reconciliation endpoint.
+  Attempts with a known provider order ID can be checked using the
+  reconciliation endpoint. Recovery of an order ID lost during creation is
+  implemented in the payment service but is not exposed as an HTTP endpoint;
+  such attempts require an authorized operational recovery process.
 - Dashboard activity and chart points are illustrative mock data. Invoice
   summaries and invoice lists come from the API.
 - This project has not been independently certified for security, regulatory
@@ -179,6 +183,44 @@ record. Production deployments must use HTTPS. The development identity
 override is not authentication; it is disabled by default and restricted to
 loopback development requests when explicitly enabled.
 
+### HTTP API
+
+All routes below are served under `/api`. Routes marked **authenticated**
+require a valid session cookie; account registration and login create that
+cookie. Request bodies are validated by the API, and error responses use the
+centralized API error format.
+
+| Method and path | Access | Purpose |
+| --- | --- | --- |
+| `GET /health` | Public | Liveness check. |
+| `POST /auth/register` | Public | Create an account and start a session. |
+| `POST /auth/login` | Public | Authenticate and start a session. |
+| `GET /auth/session` | Public | Return the current session, if any. |
+| `PATCH /auth/profile` | Authenticated | Update the account name or email. |
+| `POST /auth/logout` | Public/session-aware | Revoke the current session and clear its cookie. |
+| `GET /invoices` | Authenticated | List the signed-in owner's invoices. |
+| `GET /invoices/:id` | Authenticated | Read one owned invoice. |
+| `POST /invoices` | Authenticated | Create an invoice for the signed-in owner. |
+| `PATCH /invoices/:id` | Authenticated | Update an owned invoice. |
+| `POST /assistant/message` | Authenticated | Ask the read-only invoice assistant. |
+| `POST /payment-plans` | Authenticated | Create a plan from eligible owned invoices. |
+| `GET /payment-plans/:id` | Authenticated | Read an owned payment plan. |
+| `POST /payment-plans/:id/validate` | Authenticated | Recheck plan eligibility and invoice versions. |
+| `POST /payment-plans/:id/approve` | Authenticated | Approve the exact plan version and total. |
+| `POST /payment-plans/:id/reject` | Authenticated | Reject an owned plan. |
+| `POST /payment-plans/:id/order` | Authenticated | Create or return the plan's PayPal Sandbox order. |
+| `GET /payments/config` | Authenticated | Return the public PayPal SDK configuration. |
+| `GET /payments/attempts/:id` | Authenticated | Read an owned payment attempt. |
+| `POST /payments/attempts/:id/capture` | Authenticated | Capture the matching PayPal order. |
+| `POST /payments/attempts/:id/cancel` | Authenticated | Cancel an eligible, uncaptured attempt. |
+| `POST /payments/attempts/:id/reconcile` | Authenticated | Recheck a linked order with PayPal. |
+
+The payment API does not expose a route to attach a candidate PayPal order ID
+to an ambiguous attempt. The service-level recovery operation checks ownership
+and verifies the candidate order against the provider before attaching it.
+Do not retry order creation for an ambiguous attempt or manually change its
+database status to force checkout.
+
 ## Gemini assistant
 
 `POST /api/assistant/message` uses the official Google GenAI SDK
@@ -218,6 +260,10 @@ Reconciliation remains unresolved if the provider result cannot be verified.
 
 Order, capture, and reconciliation audit events are recorded in SQLite. This
 is useful application history but does not guarantee an immutable audit trail.
+An order whose ID was not saved cannot be looked up through the reconciliation
+route, which requires an already-linked order ID. Although verified service
+recovery exists, it currently has no authenticated HTTP controller or operator
+interface.
 
 ## Automated testing
 
@@ -293,54 +339,24 @@ as success.**
 This script describes a proposed demonstration, not a claim that a payment has
 occurred.
 
-## Hackathon submission checklist
+## Release and demo checklist
 
-Checked against the official PayPal AI Hackathon pages on **23 October 2026**:
+- Review the repository's visibility and the exact files included in a release.
+- Configure PayPal Sandbox credentials and, if desired, a Gemini API key in
+  the server environment only. Never publish `.env` files, secrets, or local
+  SQLite databases.
+- For a hosted demo, verify that it remains usable and that it uses Sandbox
+  credentials. Otherwise, provide the setup and access instructions needed by
+  reviewers.
+- Prepare any external demo video, project listing, or event submission
+  separately and confirm the applicable platform's current requirements and
+  deadlines directly with that platform.
 
-- [PayPal announcement](https://developer.paypal.com/community/blog/PayPal_AI_Hackathon/)
-- [Devpost event page](https://paypalaihackathon.devpost.com/)
-- [Official rules](https://paypalaihackathon.devpost.com/rules)
-
-The official event page showed the event as active when reviewed. The rules
-list submissions from 1 October 2026, 9:15 a.m. Pacific Time through 12
-November 2026, noon Pacific Time (shown on Devpost as 13 November, 1:30 a.m.
-GMT+5:30). Confirm the deadline and rules on Devpost before submission.
-
-The pages request a project description, functional demo or complete run
-instructions, public source repository with source/assets and an open-source
-license, public YouTube demo video under three minutes, AI/tool identification,
-and testing/access instructions. PayPal Sandbox and an AI tool are required,
-with PayPal central to the project. The rules also require ongoing demo access
-for judging, English submission materials (or specified translations), and
-appropriate authorization for third-party integrations. Pre-existing projects
-must explain significant changes made during the submission period. See the
-official rules for full requirements, judging, eligibility, and terms; no
-individual entrant's eligibility is assessed here.
-
-### Repository readiness vs. remaining submission actions
-
-- **Present in the repository:** source code, fictional seed data, setup and
-  testing instructions, MIT license, architecture and integration
-  documentation, and a Playwright-captured dashboard screenshot.
-- **Implemented but requires entrant configuration:** PayPal Sandbox demo
-  credentials and optional Gemini API key. Use only sandbox credentials.
-- **Still required outside this repository:** publish the project on a public
-  GitHub/GitLab/Bitbucket repository, verify the public repository contents,
-  create and publish the under-three-minute demo video on YouTube, add the
-  video and project/tool descriptions to the Devpost submission, and keep the
-  demo usable through judging. If not hosting the demo, provide these setup
-  instructions and appropriate access details to judges.
-
-At the time of this review, the local Git working directory had no tracked
-files and no configured remote. Track and review the source, `LICENSE`, and
-`docs/screenshots/dashboard.png` before publishing. Do not add ignored
-environment files, SQLite databases, generated dependency directories, or
-credentials to the public repository.
-
-Do not claim a live transaction, hosted demo, submitted entry, eligibility, or
-acceptance without actually completing and verifying it. The PayPal Sandbox
-and Gemini integrations in this codebase do not alone establish compliance
-with the complete event rubric.
+The source, fictional seed data, test instructions, MIT license, architecture
+notes, and dashboard screenshot are included in this repository. A screenshot
+does not demonstrate a real or Sandbox transaction. Do not claim a live
+transaction, hosted demo, submission, eligibility, or acceptance unless it has
+actually been completed and verified.
 
 ## License
 
