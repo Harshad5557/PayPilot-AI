@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: paypilot-ai-api
+    runtime: node
+    plan: free
+    buildCommand: npm ci --include=dev && npm run build --workspace @paypilot/api
+    startCommand: npm run db:deploy --workspace @paypilot/api && npm run db:seed --workspace @paypilot/api && npm run start --workspace @paypilot/api
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        value: file:./dev.db
+      - key: DEMO_IDENTITY_ENABLED
+        value: "false"
+      - key: CORS_ORIGIN
+        value: https://paypilot-ai.vercel.app

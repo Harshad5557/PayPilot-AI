@@ -1,0 +1,12 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "installCommand": "npm ci --include=dev",
+  "buildCommand": "npm run build --workspace @paypilot/web",
+  "outputDirectory": "apps/web/dist",
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://paypilot-ai-api.onrender.com/api/:path*"
+    }
+  ]
+}

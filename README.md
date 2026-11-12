@@ -131,6 +131,85 @@ variable.
 The PayPal provider uses a fixed Sandbox API endpoint. Live credentials and
 live API URLs are unsupported.
 
+## Free deployment: Vercel frontend and Render API
+
+The repository includes a Render Blueprint in `render.yaml` and Vercel
+configuration in `vercel.json`. This setup keeps browser requests and
+session cookies on the Vercel origin: the frontend calls `/api/...`, and
+Vercel forwards those requests to the Render API. Do not configure
+`VITE_API_BASE_URL` to the Render URL; cross-site session cookies can be
+blocked by browsers.
+
+This is intended for a free demo, not durable production use. Render Free
+services spin down when idle and have an ephemeral filesystem. The API uses
+SQLite, so accounts and edits can be lost when the service restarts, deploys,
+or spins down; startup reapplies migrations and reseeds the fictional demo
+records. Consult Render's current [free-instance limitations](https://render.com/docs/free)
+before deploying. Persistent disks are not available to free web services.
+
+### Deploy the API
+
+1. Sign in to [Render](https://dashboard.render.com/) and create a **Blueprint**
+   from this GitHub repository, branch `main`. Render reads `render.yaml` from
+   the repository root.
+2. Confirm the service is named `paypilot-ai-api` and choose the Free plan.
+   Render will create a URL such as
+   `https://paypilot-ai-api.onrender.com`. Service names and availability can
+   vary; record the actual URL shown by Render.
+3. Wait for the first deployment to finish. Check
+   `https://YOUR-RENDER-SERVICE.onrender.com/api/health`; it should return the
+   API health response.
+4. If the Render URL differs from `https://paypilot-ai-api.onrender.com`, edit
+   `vercel.json` and replace the hostname in the rewrite destination
+   with the actual Render service hostname. Commit and push that update before
+   deploying the web project.
+5. In Render's Environment settings, optionally add `GEMINI_API_KEY` and
+   `GEMINI_MODEL` for the assistant. For checkout, add both
+   `PAYPAL_CLIENT_ID` and `PAYPAL_CLIENT_SECRET` from a PayPal **Sandbox** REST
+   app. The secret belongs only in Render. The app does not support live
+   PayPal credentials.
+
+### Deploy the frontend
+
+1. Import the same GitHub repository into [Vercel](https://vercel.com/new).
+2. Keep **Root Directory** set to the repository root (`.`). The npm workspace
+   lockfile and `vercel.json` are at the root.
+3. Use these build settings:
+   - Framework preset: **Other**
+   - Install command: `npm ci --include=dev`
+   - Build command: `npm run build --workspace @paypilot/web`
+   - Output directory: `apps/web/dist`
+4. Set the Vercel environment variable `VITE_API_BASE_URL` to `/api` for
+   Production, Preview, and Development as applicable. It is a public URL,
+   not a secret.
+5. Deploy and note the production domain Vercel assigns, for example
+   `https://paypilot-ai.vercel.app`.
+6. If that hostname differs from the one in `render.yaml`, update Render's
+   `CORS_ORIGIN` environment variable to the exact production Vercel origin
+   (scheme and hostname, without a trailing slash), then redeploy the API.
+
+The rewrite in `vercel.json` is the link between the two deployments:
+`https://YOUR-VERCEL-DOMAIN.vercel.app/api/health` should return the same
+response as the Render health URL. Vercel preview domains may need a matching
+`CORS_ORIGIN` if accessing the backend directly; use the production Vercel
+domain for the main demo.
+
+### Verify the live app
+
+1. Open `https://YOUR-VERCEL-DOMAIN.vercel.app/api/health` and verify the API
+   responds through the Vercel rewrite.
+2. Open `https://YOUR-VERCEL-DOMAIN.vercel.app`, register a test account, and
+   confirm invoices load. Sign out and sign in again to check session cookies.
+3. Create and edit a test invoice. If PayPal Sandbox is configured, approve a
+   payment plan and use a Sandbox buyer account only.
+4. Never enter real customer information or report a payment as successful
+   unless the backend confirms a verified capture.
+
+Render's free service may take about a minute to wake after inactivity, and
+the first API request can be slow. The service can also be restarted or
+suspended when free usage limits are reached. Check the provider dashboards for
+current limits and status.
+
 ## Architecture
 
 ```text
