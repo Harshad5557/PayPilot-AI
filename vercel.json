@@ -6,7 +6,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://paypilot-ai-api-0b7e.onrender.com/"
+      "destination": "https://paypilot-ai-api-0b7e.onrender.com/api/:path*"
     }
   ]
 }
